@@ -1,16 +1,20 @@
-
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import time
 
+# === IMPORTS ===
 from one_hour import run_signal_engine as run_one_hour
 from one_hour_pro import run_signal_engine as run_one_hour_pro
+from one_hour_pro_plus import run_signal_engine as run_one_hour_pro_plus  # Make sure this exists
 
-# Page config
-st.set_page_config(page_title="Forex Signal Dashboard", layout="wide", initial_sidebar_state="expanded")
+# === CONFIG ===
+st.set_page_config(
+    page_title="Forex Signal Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# CSS for light and dark themes
+# === THEME CSS ===
 def set_custom_theme(mode):
     if mode == "Dark":
         st.markdown("""
@@ -39,52 +43,36 @@ def set_custom_theme(mode):
             </style>
         """, unsafe_allow_html=True)
 
-# Sidebar mode selection
+# === SIDEBAR ===
 mode = st.sidebar.radio("🌗 Theme Mode", ["Light", "Dark"], index=0)
 set_custom_theme(mode)
 
-# Title and Info
-st.title("📊 Forex Signal Dashboard (1H & 1H Pro)")
-st.markdown("Get real-time signals from two AI models: **Standard** and **Pro**.")
-st.caption("✅ Built to work seamlessly across PC and Mobile devices.")
+# === TITLE ===
+st.title("📊 Forex Signal Dashboard (1H, Pro & Pro+)")
+st.markdown("Get real-time signals from three AI models: **Standard**, **Pro**, and **Pro+**.")
+st.caption("✅ Fully optimized for Desktop and Mobile screens.")
 
-# Refresh button
+# === REFRESH ===
 if st.button("🔄 Refresh Dashboards"):
     st.session_state['last_refreshed'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     st.success("🔁 Dashboard refreshed!")
 
 st.markdown(f"🕒 **Last Refreshed:** `{st.session_state.get('last_refreshed', 'Not yet refreshed')}`")
 
-# Responsive layout: switch to one-column if screen is narrow
-if st.columns(2)[0].beta_container()._parent.width < 768:
-    # Mobile View: Single Column
-    st.subheader("📘 1 Hour Model")
+# === TABS (Mobile/Desktop Friendly) ===
+tab1, tab2, tab3 = st.tabs(["📘 1 Hour Model", "📗 1 Hour Pro", "📙 1 Hour Pro+"])
+
+with tab1:
     df1 = run_one_hour()
     st.dataframe(df1, use_container_width=True)
 
-    st.subheader("📗 1 Hour Pro Model")
+with tab2:
     df2 = run_one_hour_pro()
     st.dataframe(df2, use_container_width=True)
-   
-    st.subheader("📗 1 Hour Pro Model+")
-    df2 = run_one_hour_pro_plus()
-    st.dataframe(df2, use_container_width=True)
-else:
-    # Desktop View: Two Columns
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.subheader("📘 1 Hour Model")
-        df1 = run_one_hour()
-        st.dataframe(df1, use_container_width=True)
 
-    with col2:
-        st.subheader("📗 1 Hour Pro Model")
-        df2 = run_one_hour_pro()
-        st.dataframe(df2, use_container_width=True)
-    with col2:
-        st.subheader("📗 1 Hour Pro Model+")
-        df2 = run_one_hour_pro_plus()
-        st.dataframe(df2, use_container_width=True)
+with tab3:
+    df3 = run_one_hour_pro_plus()
+    st.dataframe(df3, use_container_width=True)
 
         
 
