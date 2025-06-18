@@ -7,9 +7,13 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.utils import resample
 
 # === CONFIG ===
-API_KEYS = ['your_key_1', 'your_key_2', 'your_key_3']
+API_KEYS = API_KEYS = [
+    '54a7479bdf2040d3a35d6b3ae6457f9d',
+    'd162b35754ca4c54a13ebe7abecab4e0',
+    'a7266b2503fd497496d47527a7e63b5d'
+]
 INTERVAL = '1h'
-SYMBOLS = ['EUR/USD']
+SYMBOLS =  ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
 MULTIPLIER = 100
 api_usage_index = 0
 _cached_data = {}
