@@ -5,10 +5,10 @@ from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.utils import resample
-from datetime import datetime, timedelta
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-# === Multi API Setup ===
+# === Config ===
 API_KEYS = [
     '54a7479bdf2040d3a35d6b3ae6457f9d',
     'd162b35754ca4c54a13ebe7abecab4e0',
@@ -16,17 +16,17 @@ API_KEYS = [
 ]
 api_usage_index = 0
 
+INTERVAL = '1h'
+SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD']
+MULTIPLIER = 100
+
+_cached_data = {}
+
 def get_next_api_key():
     global api_usage_index
     key = API_KEYS[api_usage_index % len(API_KEYS)]
     api_usage_index += 1
     return key
-
-INTERVAL = '1h'
-SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
-MULTIPLIER = 100
-
-_cached_data = {}
 
 def fetch_data(symbol):
     if symbol in _cached_data:
@@ -86,6 +86,7 @@ def add_features(df):
     df['bb_upper'] = df['close'].rolling(20).mean() + 2 * df['close'].rolling(20).std()
     df['bb_lower'] = df['close'].rolling(20).mean() - 2 * df['close'].rolling(20).std()
     df['volatility'] = df['high'] - df['low']
+    df['atr'] = df['volatility'].rolling(14).mean()
     df['target'] = np.where(df['close'].shift(-1) > df['close'], 1, 0)
     return df.dropna()
 
@@ -127,20 +128,32 @@ def train_model(df):
     return final_model, np.mean(acc_scores)
 
 def predict_signal(symbol, df, model):
-    latest = df[['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx', 'bb_upper', 'bb_lower', 'volatility']].iloc[-1:]
+    features = ['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx', 'bb_upper', 'bb_lower', 'volatility']
+    latest = df[features].iloc[-1:]
     row = df.iloc[-1]
     pred = model.predict(latest)[0]
     proba = model.predict_proba(latest)[0]
-    signal = "BUY 📈" if pred == 1 else "SELL 🖉"
+    signal = "BUY \ud83d\udcc8" if pred == 1 else "SELL \ud83d\udd89"
 
     rsi = row['rsi14']
     ema_cross = row['ema10'] > row['ma10']
     momentum = row['momentum'] > 0
     macd = row['macd'] > 0
-    adx_strong = row['adx'] > 20
+    adx_strong = row['adx'] > 25
     bb_signal = row['close'] < row['bb_lower'] if pred == 1 else row['close'] > row['bb_upper']
-    confidence_score = sum([ema_cross, momentum, macd, adx_strong, bb_signal])
-    label = "✅ Strong" if confidence_score >= 4 else "⚠️ Weak"
+    rsi_buy = rsi < 30 and proba[1] > 0.65
+    rsi_sell = rsi > 70 and proba[0] > 0.65
+
+    confidence_score = sum([
+        ema_cross, momentum, macd, adx_strong, bb_signal,
+        rsi_buy if pred == 1 else rsi_sell
+    ])
+    label = "\u2705 Strong" if confidence_score >= 5 else "\u26a0\ufe0f Weak"
+
+    price = row['close']
+    atr = row['atr']
+    tp = price + atr * 1.5 if pred == 1 else price - atr * 1.5
+    sl = price - atr if pred == 1 else price + atr
 
     return [
         symbol,
@@ -150,26 +163,38 @@ def predict_signal(symbol, df, model):
         f"{proba[1]:.2f}",
         f"{rsi:.1f}",
         label,
-        f"{row['close'] * MULTIPLIER:.2f}"
+        f"{price * MULTIPLIER:.2f}",
+        f"TP: {tp:.4f} / SL: {sl:.4f}"
     ]
 
 def run_signal_engine():
-    headers = ["Symbol", "Timestamp", "Signal", "Prob SELL", "Prob BUY", "RSI", "Confidence", f"Price x{MULTIPLIER}"]
+    headers = ["Symbol", "Timestamp", "Signal", "Prob SELL", "Prob BUY", "RSI", "Confidence", f"Price x{MULTIPLIER}", "Plan"]
 
     def process_symbol(symbol):
         df = fetch_data(symbol)
-        if df.empty or len(df) < 100:
-            return [symbol, "-", "❌ Insufficient data", "-", "-", "-", "-", "-"]
+        if df.empty or len(df) < 150:
+            return [symbol, "-", "\u274c Insufficient data", "-", "-", "-", "-", "-", "-"]
 
         df = add_features(df)
-        if len(df) < 100:
-            return [symbol, "-", "⚠️ Not enough data", "-", "-", "-", "-", "-"]
+        if len(df) < 150:
+            return [symbol, "-", "\u26a0\ufe0f Not enough data", "-", "-", "-", "-", "-", "-"]
 
         model, acc = train_model(df)
-        if model is None or acc < 0.7:
-            return [symbol, "-", "⚠️ Model skipped/low acc", "-", "-", "-", "-", "-"]
+        if model is None or acc < 0.75:
+            return [symbol, "-", "\u26a0\ufe0f Model skipped/low acc", "-", "-", "-", "-", "-", "-"]
 
         return predict_signal(symbol, df, model)
+
+    with ThreadPoolExecutor() as executor:
+        table = list(executor.map(process_symbol, SYMBOLS))
+
+    return pd.DataFrame(table, columns=headers)
+
+# Run
+if __name__ == "__main__":
+    df_result = run_signal_engine()
+    print(df_result.to_markdown(index=False))
+
 
     with ThreadPoolExecutor() as executor:
         table = list(executor.map(process_symbol, SYMBOLS))
