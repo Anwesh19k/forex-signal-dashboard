@@ -7,7 +7,11 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
 
 # === CONFIG ===
-API_KEYS = ['your_key_1', 'your_key_2', 'your_key_3']  # Add your API keys
+API_KEYS = API_KEYS = [
+    '54a7479bdf2040d3a35d6b3ae6457f9d',
+    '09c09d58ed5e4cf4afd9a9cac8e09b5d',
+    'df00920c02c54a59a426948a47095543'
+] # Add your API keys
 INTERVAL = '1h'
 SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
 MULTIPLIER = 100
