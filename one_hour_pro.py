@@ -10,7 +10,9 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 API_KEYS = [
-    'your_key_1', 'your_key_2', 'your_key_3'  # Replace with your real TwelveData keys
+    '54a7479bdf2040d3a35d6b3ae6457f9d',
+    'd162b35754ca4c54a13ebe7abecab4e0',
+    'a7266b2503fd497496d47527a7e63b5d'
 ]
 INTERVAL = '1h'
 SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
