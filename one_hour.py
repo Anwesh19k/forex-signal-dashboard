@@ -1,30 +1,25 @@
-import pandas as pd 
+import pandas as pd
 import numpy as np
 import requests
-import time
 from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.utils import resample
-from tabulate import tabulate
 from datetime import datetime, timedelta
 
-# === Config ===
 API_KEY = '54a7479bdf2040d3a35d6b3ae6457f9d'
-INTERVAL = '1h'  # Changed to 1 hour
+INTERVAL = '1h'
 SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
-MULTIPLIER = 100  # You can set 50, 100, or 500 based on your risk
+MULTIPLIER = 100
 
-# === Timer function ===
-def time_until_next_hour():
-    now = datetime.now()
-    next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-    return str(next_hour - now).split(".")[0]
+# Cache recent results (improves performance)
+_cached_data = {}
 
-# === Data fetching ===
 def fetch_data(symbol):
-    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&outputsize=300&apikey={API_KEY}"
+    if symbol in _cached_data:
+        return _cached_data[symbol]
     try:
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&outputsize=300&apikey={API_KEY}"
         r = requests.get(url, timeout=10)
         data = r.json()
         if "values" not in data:
@@ -32,11 +27,12 @@ def fetch_data(symbol):
         df = pd.DataFrame(data["values"])
         df = df.astype({'open': float, 'high': float, 'low': float, 'close': float})
         df['datetime'] = pd.to_datetime(df['datetime'])
-        return df.sort_values('datetime')
+        df = df.sort_values('datetime')
+        _cached_data[symbol] = df
+        return df
     except:
         return pd.DataFrame()
 
-# === Feature engineering ===
 def compute_rsi(series, period=14):
     delta = series.diff()
     gain = np.where(delta > 0, delta, 0)
@@ -78,12 +74,11 @@ def add_features(df):
     df['target'] = np.where(df['close'].shift(-1) > df['close'], 1, 0)
     return df.dropna()
 
-# === Model training ===
 def train_model(df):
     features = ['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx', 'bb_upper', 'bb_lower', 'volatility']
     X = df[features]
     y = df['target']
-    
+
     if y.value_counts().min() < 10:
         return None, 0
 
@@ -116,13 +111,12 @@ def train_model(df):
 
     return final_model, np.mean(acc_scores)
 
-# === Prediction ===
 def predict_signal(symbol, df, model):
     latest = df[['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx', 'bb_upper', 'bb_lower', 'volatility']].iloc[-1:]
     row = df.iloc[-1]
     pred = model.predict(latest)[0]
     proba = model.predict_proba(latest)[0]
-    signal = "BUY 📈" if pred == 1 else "SELL 📉"
+    signal = "BUY 📈" if pred == 1 else "SELL 🖉"
 
     rsi = row['rsi14']
     ema_cross = row['ema10'] > row['ma10']
@@ -141,10 +135,9 @@ def predict_signal(symbol, df, model):
         f"{proba[1]:.2f}",
         f"{rsi:.1f}",
         label,
-        f"{row['close'] * MULTIPLIER:.2f}"  # profit scaled by multiplier
+        f"{row['close'] * MULTIPLIER:.2f}"
     ]
 
-# === Main loop ===
 def run_signal_engine():
     headers = ["Symbol", "Timestamp", "Signal", "Prob SELL", "Prob BUY", "RSI", "Confidence", f"Price x{MULTIPLIER}"]
     table = []
@@ -169,12 +162,3 @@ def run_signal_engine():
         table.append(row)
 
     return pd.DataFrame(table, columns=headers)
-    
-
-# === Run every hour ===
-if __name__ == "__main__":
-    # while True (removed for web)
-        print("\n🔄 Fetching latest hourly signals...\n")
-        run_signal_engine()
-        print("\n✅ Waiting for next 1-hour candle...\n")
-        # Removed for web
