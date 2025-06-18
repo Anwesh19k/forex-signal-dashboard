@@ -24,6 +24,7 @@ def get_next_api_key():
 INTERVAL = '1h'
 SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
 MULTIPLIER = 100
+CONFIDENCE_THRESHOLD = 0.7
 
 _cached_data = {}
 
@@ -46,6 +47,8 @@ def fetch_data(symbol):
     except Exception as e:
         print(f"[ERROR] {symbol} - {e}")
         return pd.DataFrame()
+
+# === Indicators ===
 
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -74,6 +77,17 @@ def compute_adx(df, period=14):
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-6)) * 100
     return pd.Series(dx).rolling(window=period).mean()
 
+# === Target + Features ===
+
+def create_targets(df, profit_target=0.005, stop_loss=0.003):
+    df['future_max'] = df['close'].rolling(window=5).max().shift(-1)
+    df['future_min'] = df['close'].rolling(window=5).min().shift(-1)
+    df['target'] = np.where(
+        df['future_max'] >= df['close'] * (1 + profit_target), 1,
+        np.where(df['future_min'] <= df['close'] * (1 - stop_loss), 0, np.nan)
+    )
+    return df.dropna(subset=['target'])
+
 def add_features(df):
     df['ma5'] = df['close'].rolling(5).mean()
     df['ma10'] = df['close'].rolling(10).mean()
@@ -85,11 +99,18 @@ def add_features(df):
     df['bb_upper'] = df['close'].rolling(20).mean() + 2 * df['close'].rolling(20).std()
     df['bb_lower'] = df['close'].rolling(20).mean() - 2 * df['close'].rolling(20).std()
     df['volatility'] = df['high'] - df['low']
-    df['target'] = np.where(df['close'].shift(-1) > df['close'], 1, 0)
+    df['roc'] = df['close'].pct_change(periods=5)
+    df['atr'] = df['volatility'].rolling(14).mean()
+    df['candle_body'] = df['close'] - df['open']
+    df['candle_range'] = df['high'] - df['low']
+    df = create_targets(df)
     return df.dropna()
 
+# === Model Training ===
+
 def train_model(df):
-    features = ['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx', 'bb_upper', 'bb_lower', 'volatility']
+    features = ['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx',
+                'bb_upper', 'bb_lower', 'volatility', 'roc', 'atr', 'candle_body', 'candle_range']
     X = df[features]
     y = df['target']
 
@@ -125,56 +146,64 @@ def train_model(df):
 
     return final_model, np.mean(acc_scores)
 
+# === Prediction and Signal Logic ===
+
 def predict_signal(symbol, df, model):
-    latest = df[['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx', 'bb_upper', 'bb_lower', 'volatility']].iloc[-1:]
+    features = ['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx',
+                'bb_upper', 'bb_lower', 'volatility', 'roc', 'atr', 'candle_body', 'candle_range']
+    latest = df[features].iloc[-1:]
     row = df.iloc[-1]
     pred = model.predict(latest)[0]
     proba = model.predict_proba(latest)[0]
-    signal = "BUY 📈" if pred == 1 else "SELL 🖉"
+    confidence = proba[1] if pred == 1 else proba[0]
 
-    rsi = row['rsi14']
-    ema_cross = row['ema10'] > row['ma10']
-    momentum = row['momentum'] > 0
-    macd = row['macd'] > 0
-    adx_strong = row['adx'] > 20
-    bb_signal = row['close'] < row['bb_lower'] if pred == 1 else row['close'] > row['bb_upper']
-    confidence_score = sum([ema_cross, momentum, macd, adx_strong, bb_signal])
-    label = "✅ Strong" if confidence_score >= 4 else "⚠️ Weak"
+    # Entry/Exit Logic
+    entry = (pred == 1 and confidence > CONFIDENCE_THRESHOLD and row['rsi14'] < 70 and row['macd'] > 0 and row['adx'] > 20)
+    exit_signal = (row['rsi14'] > 75 or row['macd'] < 0 or row['close'] > row['bb_upper'])
+
+    signal_text = "BUY 📈" if pred == 1 else "SELL 🖉"
+    confidence_label = "✅ Strong" if confidence > 0.7 else "⚠️ Weak"
+    entry_text = "ENTRY ✅" if entry else "WAIT ⏳"
+    exit_text = "EXIT ❗" if exit_signal else "HOLD 🕒"
 
     return [
         symbol,
         str(row['datetime']),
-        signal,
+        signal_text,
         f"{proba[0]:.2f}",
         f"{proba[1]:.2f}",
-        f"{rsi:.1f}",
-        label,
-        f"{row['close'] * MULTIPLIER:.2f}"
+        f"{row['rsi14']:.1f}",
+        confidence_label,
+        f"{row['close'] * MULTIPLIER:.2f}",
+        entry_text,
+        exit_text
     ]
 
+# === Run Signal Engine ===
+
 def run_signal_engine():
-    headers = ["Symbol", "Timestamp", "Signal", "Prob SELL", "Prob BUY", "RSI", "Confidence", f"Price x{MULTIPLIER}"]
+    headers = ["Symbol", "Timestamp", "Signal", "Prob SELL", "Prob BUY", "RSI", "Confidence",
+               f"Price x{MULTIPLIER}", "Entry", "Exit"]
     table = []
 
     for symbol in SYMBOLS:
         df = fetch_data(symbol)
         if df.empty or len(df) < 100:
-            table.append([symbol, "-", "❌ Insufficient data", "-", "-", "-", "-", "-"])
+            table.append([symbol, "-", "❌ Insufficient data", "-", "-", "-", "-", "-", "-", "-"])
             continue
 
         df = add_features(df)
         if len(df) < 100:
-            table.append([symbol, "-", "⚠️ Not enough data", "-", "-", "-", "-", "-"])
+            table.append([symbol, "-", "⚠️ Not enough data", "-", "-", "-", "-", "-", "-", "-"])
             continue
 
         model, acc = train_model(df)
         if model is None or acc < 0.7:
-            table.append([symbol, "-", "⚠️ Model skipped/low acc", "-", "-", "-", "-", "-"])
+            table.append([symbol, "-", "⚠️ Model skipped/low acc", "-", "-", "-", "-", "-", "-", "-"])
             continue
 
         row = predict_signal(symbol, df, model)
         table.append(row)
 
     return pd.DataFrame(table, columns=headers)
-
 
