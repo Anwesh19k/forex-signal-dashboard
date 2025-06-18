@@ -1,11 +1,13 @@
 import pandas as pd
 import numpy as np
 import requests
+import streamlit as st
 from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.utils import resample
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 
 API_KEY = 'f3fbe8d7f5a4462e97b279dc2557f559'
 INTERVAL = '1h'
@@ -18,6 +20,7 @@ def time_until_next_hour():
     return str(next_hour - now).split(".")[0]
 
 
+@st.cache_data(ttl=3600)
 def fetch_data(symbol):
     url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&outputsize=300&apikey={API_KEY}"
     try:
@@ -78,7 +81,8 @@ def add_features(df):
     return df.dropna()
 
 
-def train_model(df):
+@st.cache_resource
+def train_cached_model(df):
     features = ['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx', 'bb_upper', 'bb_lower', 'volatility']
     X = df[features]
     y = df['target']
@@ -148,25 +152,24 @@ def predict_signal(symbol, df, model):
 
 def run_signal_engine():
     headers = ["Symbol", "Timestamp", "Signal", "Prob SELL", "Prob BUY", "RSI", "Confidence", "Scaled Close"]
-    table = []
 
-    for symbol in SYMBOLS:
+    def process_symbol(symbol):
         df = fetch_data(symbol)
         if df.empty or len(df) < 100:
-            table.append([symbol, "-", "❌ Insufficient data", "-", "-", "-", "-", "-"])
-            continue
+            return [symbol, "-", "❌ Insufficient data", "-", "-", "-", "-", "-"]
 
         df = add_features(df)
         if len(df) < 100:
-            table.append([symbol, "-", "⚠️ Not enough data", "-", "-", "-", "-", "-"])
-            continue
+            return [symbol, "-", "⚠️ Not enough data", "-", "-", "-", "-", "-"]
 
-        model, acc = train_model(df)
+        model, acc = train_cached_model(df)
         if model is None or acc < 0.7:
-            table.append([symbol, "-", "⚠️ Model skipped/low acc", "-", "-", "-", "-", "-"])
-            continue
+            return [symbol, "-", "⚠️ Model skipped/low acc", "-", "-", "-", "-", "-"]
 
-        row = predict_signal(symbol, df, model)
-        table.append(row)
+        return predict_signal(symbol, df, model)
+
+    with ThreadPoolExecutor() as executor:
+        table = list(executor.map(process_symbol, SYMBOLS))
 
     return pd.DataFrame(table, columns=headers)
+
