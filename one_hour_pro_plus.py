@@ -123,7 +123,7 @@ def predict(df, model, symbol):
         "Plan": f"{price} / TP: {round(tp, 4)} / SL: {round(sl, 4)}"
     }
 
-def run():
+def run_signal_engine():
     results = []
     for symbol in SYMBOLS:
         df = fetch_data(symbol)
