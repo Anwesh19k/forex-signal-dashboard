@@ -7,19 +7,32 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.utils import resample
 from datetime import datetime, timedelta
 
-API_KEY = '54a7479bdf2040d3a35d6b3ae6457f9d'
+# === Multi API Setup ===
+API_KEYS = [
+    '54a7479bdf2040d3a35d6b3ae6457f9d',
+    '09c09d58ed5e4cf4afd9a9cac8e09b5d',
+    'df00920c02c54a59a426948a47095543'
+]
+api_usage_index = 0
+
+def get_next_api_key():
+    global api_usage_index
+    key = API_KEYS[api_usage_index % len(API_KEYS)]
+    api_usage_index += 1
+    return key
+
 INTERVAL = '1h'
 SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
 MULTIPLIER = 100
 
-# Cache recent results (improves performance)
 _cached_data = {}
 
 def fetch_data(symbol):
     if symbol in _cached_data:
         return _cached_data[symbol]
     try:
-        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&outputsize=300&apikey={API_KEY}"
+        api_key = get_next_api_key()
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&outputsize=300&apikey={api_key}"
         r = requests.get(url, timeout=10)
         data = r.json()
         if "values" not in data:
@@ -30,7 +43,8 @@ def fetch_data(symbol):
         df = df.sort_values('datetime')
         _cached_data[symbol] = df
         return df
-    except:
+    except Exception as e:
+        print(f"[ERROR] {symbol} - {e}")
         return pd.DataFrame()
 
 def compute_rsi(series, period=14):
@@ -162,3 +176,4 @@ def run_signal_engine():
         table.append(row)
 
     return pd.DataFrame(table, columns=headers)
+
