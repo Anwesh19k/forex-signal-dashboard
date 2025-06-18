@@ -177,3 +177,4 @@ def run_signal_engine():
 
     return pd.DataFrame(table, columns=headers)
 
+
