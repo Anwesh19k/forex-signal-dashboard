@@ -9,7 +9,7 @@ from sklearn.model_selection import TimeSeriesSplit
 # === CONFIG ===
 API_KEYS = ['your_key_1', 'your_key_2', 'your_key_3']  # Add your API keys
 INTERVAL = '1h'
-SYMBOLS = ['EUR/USD']
+SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
 MULTIPLIER = 100
 api_usage_index = 0
 _cached_data = {}
