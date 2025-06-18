@@ -137,5 +137,5 @@ def run_signal_engine():
     return pd.DataFrame(results)
 
 # RUN
-output = run()
+output = run_signal_engine()
 print(output.to_markdown(index=False))
