@@ -5,15 +5,19 @@ from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.utils import resample
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# === Multi API Setup ===
+# === Config ===
 API_KEYS = [
     '54a7479bdf2040d3a35d6b3ae6457f9d',
     '09c09d58ed5e4cf4afd9a9cac8e09b5d',
     'df00920c02c54a59a426948a47095543'
 ]
 api_usage_index = 0
+INTERVAL = '1h'
+SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
+MULTIPLIER = 100
+_cached_data = {}
 
 def get_next_api_key():
     global api_usage_index
@@ -21,18 +25,11 @@ def get_next_api_key():
     api_usage_index += 1
     return key
 
-INTERVAL = '1h'
-SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
-MULTIPLIER = 100
-
-_cached_data = {}
-
 def fetch_data(symbol):
     if symbol in _cached_data:
         return _cached_data[symbol]
     try:
-        api_key = get_next_api_key()
-        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&outputsize=300&apikey={api_key}"
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&outputsize=500&apikey={get_next_api_key()}"
         r = requests.get(url, timeout=10)
         data = r.json()
         if "values" not in data:
@@ -85,9 +82,7 @@ def add_features(df):
     df['bb_upper'] = df['close'].rolling(20).mean() + 2 * df['close'].rolling(20).std()
     df['bb_lower'] = df['close'].rolling(20).mean() - 2 * df['close'].rolling(20).std()
     df['volatility'] = df['high'] - df['low']
-    # Adjusted target logic
-    threshold = 0.002  # ~0.2% move
-    df['target'] = np.where(df['close'].shift(-1) > df['close'] * (1 + threshold), 1, 0)
+    df['target'] = np.where((df['close'].shift(-1) - df['close']) / df['close'] > 0.001, 1, 0)  # 0.1% gain = BUY
     return df.dropna()
 
 def train_model(df):
@@ -95,26 +90,24 @@ def train_model(df):
     X = df[features]
     y = df['target']
 
-    if y.value_counts().min() < 10:
+    if y.value_counts().min() < 5:  # reduced to 5
         return None, 0
 
-    df_combined = pd.concat([X, y], axis=1)
-    df_1 = df_combined[df_combined['target'] == 1]
-    df_0 = df_combined[df_combined['target'] == 0]
-    df_balanced = pd.concat([
+    df_1 = df[df['target'] == 1]
+    df_0 = df[df['target'] == 0]
+    df_bal = pd.concat([
         resample(df_1, replace=True, n_samples=min(len(df_1), len(df_0)), random_state=42),
         resample(df_0, replace=True, n_samples=min(len(df_1), len(df_0)), random_state=42)
-    ])
-    df_balanced = df_balanced.sample(frac=1, random_state=42)
-    X = df_balanced[features]
-    y = df_balanced['target']
+    ]).sample(frac=1, random_state=42)
 
-    tscv = TimeSeriesSplit(n_splits=5)
+    X_bal = df_bal[features]
+    y_bal = df_bal['target']
+
     acc_scores = []
-
-    for train_idx, test_idx in tscv.split(X):
-        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+    tscv = TimeSeriesSplit(n_splits=5)
+    for train_idx, test_idx in tscv.split(X_bal):
+        X_train, X_test = X_bal.iloc[train_idx], X_bal.iloc[test_idx]
+        y_train, y_test = y_bal.iloc[train_idx], y_bal.iloc[test_idx]
         model = XGBClassifier(n_estimators=150, max_depth=4, learning_rate=0.05,
                               use_label_encoder=False, eval_metric='logloss', verbosity=0)
         model.fit(X_train, y_train)
@@ -123,8 +116,7 @@ def train_model(df):
 
     final_model = XGBClassifier(n_estimators=150, max_depth=4, learning_rate=0.05,
                                 use_label_encoder=False, eval_metric='logloss', verbosity=0)
-    final_model.fit(X, y)
-
+    final_model.fit(X_bal, y_bal)
     return final_model, np.mean(acc_scores)
 
 def predict_signal(symbol, df, model):
@@ -132,24 +124,17 @@ def predict_signal(symbol, df, model):
     row = df.iloc[-1]
     pred = model.predict(latest)[0]
     proba = model.predict_proba(latest)[0]
+    signal = "BUY 📈" if pred == 1 else "SELL 🖉"
 
-    rsi = row['rsi14']
-    ema_cross = row['ema10'] > row['ma10']
-    momentum = row['momentum'] > 0
-    macd = row['macd'] > 0
-    adx_strong = row['adx'] > 20
-    bb_signal = row['close'] < row['bb_lower'] if pred == 1 else row['close'] > row['bb_upper']
-    confidence_score = sum([ema_cross, momentum, macd, adx_strong, bb_signal])
-    label = "✅ Strong" if confidence_score >= 4 else "⚠️ Weak"
-
-    # Improved Signal Logic
-    signal = "BUY 📈" if proba[1] > 0.7 else ("SELL 🖉" if proba[0] > 0.7 else "HOLD")
-
-    # Entry/Exit Plan
-    entry_price = row['close']
-    take_profit = entry_price * 1.004  # 0.4% gain
-    stop_loss = entry_price * 0.996   # 0.4% loss
-    trade_plan = f"{entry_price:.4f} / TP: {take_profit:.4f} / SL: {stop_loss:.4f}"
+    # Confidence assessment
+    confidence_factors = [
+        row['ema10'] > row['ma10'],
+        row['momentum'] > 0,
+        row['macd'] > 0,
+        row['adx'] > 20,
+        (row['close'] < row['bb_lower']) if pred == 1 else (row['close'] > row['bb_upper'])
+    ]
+    label = "✅ Strong" if sum(confidence_factors) >= 4 else "⚠️ Weak"
 
     return [
         symbol,
@@ -157,42 +142,32 @@ def predict_signal(symbol, df, model):
         signal,
         f"{proba[0]:.2f}",
         f"{proba[1]:.2f}",
-        f"{rsi:.1f}",
+        f"{row['rsi14']:.1f}",
         label,
-        f"{row['close'] * MULTIPLIER:.2f}",
-        trade_plan
+        f"{row['close'] * MULTIPLIER:.2f}"
     ]
 
 def run_signal_engine():
-    headers = ["Symbol", "Timestamp", "Signal", "Prob SELL", "Prob BUY", "RSI", "Confidence", f"Price x{MULTIPLIER}", "Plan"]
+    headers = ["Symbol", "Timestamp", "Signal", "Prob SELL", "Prob BUY", "RSI", "Confidence", f"Price x{MULTIPLIER}"]
     table = []
-
     for symbol in SYMBOLS:
         df = fetch_data(symbol)
         if df.empty or len(df) < 100:
-            table.append([symbol, "-", "❌ Insufficient data", "-", "-", "-", "-", "-", "-"])
+            table.append([symbol, "-", "❌ Insufficient data", "-", "-", "-", "-", "-"])
             continue
 
         df = add_features(df)
         if len(df) < 100:
-            table.append([symbol, "-", "⚠️ Not enough data", "-", "-", "-", "-", "-", "-"])
+            table.append([symbol, "-", "⚠️ Not enough features", "-", "-", "-", "-", "-"])
             continue
 
         model, acc = train_model(df)
-        if model is None or acc < 0.7:
-            table.append([symbol, "-", "⚠️ Model skipped/low acc", "-", "-", "-", "-", "-", "-"])
+        if model is None or acc < 0.65:
+            table.append([symbol, "-", f"⚠️ Model skipped (acc={acc:.2f})", "-", "-", "-", "-", "-"])
             continue
 
-        row = predict_signal(symbol, df, model)
-        table.append(row)
+        signal_row = predict_signal(symbol, df, model)
+        table.append(signal_row)
 
-    df_result = pd.DataFrame(table, columns=headers)
-    df_result['Prob BUY'] = pd.to_numeric(df_result['Prob BUY'], errors='coerce')
-    return df_result.sort_values(by="Prob BUY", ascending=False)
-
-# Example usage
-if __name__ == "__main__":
-    result = run_signal_engine()
-    print(result.to_string(index=False))
-
+    return pd.DataFrame(table, columns=headers)
 
